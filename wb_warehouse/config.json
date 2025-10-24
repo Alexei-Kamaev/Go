@@ -1,0 +1,6 @@
+{
+  "debug": false,
+  "url_get_list": "https://supplies-api.wildberries.ru/api/v1/warehouses",
+  "url_ping_token": "https://supplies-api.wildberries.ru/ping",
+  "key": "YOUR_API_TOKEN_wildberries"
+}
