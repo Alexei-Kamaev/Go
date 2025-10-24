@@ -13,7 +13,14 @@ go build -o warehouse
 
 ## Использование
 ### Все склады
+```bash
+
 ./warehouse
 
+```
 ### Поиск по названию/адресу
+```bash
+
 ./warehouse "москва"
+
+```
