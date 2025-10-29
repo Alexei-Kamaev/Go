@@ -1,6 +1,6 @@
 # WB Warehouse CLI
 
-CLI утилита для поиска и просмотра складов Wildberries через API.
+CLI утилита для поиска ID и просмотра склада Wildberries через API.
 
 ## Установка
 
