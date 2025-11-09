@@ -8,8 +8,6 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-var redisClient *redis.Client
-
 type redisConfig struct {
 	Addr     string
 	Password string
@@ -17,13 +15,28 @@ type redisConfig struct {
 	TimeOut  time.Duration
 }
 
-func checkRedisConnection(cfg *redisConfig) (*redis.Client, error) {
+func getStringValueRedis(key string) (value string, err error) {
+	ctx, cancel := context.WithTimeout(context.Background(), cfgRedis.TimeOut)
+	defer cancel()
+	value, err = redisClient.Get(ctx, key).Result()
+	switch err {
+	case redis.Nil:
+		addLog("ключ %s не найден в Redis", key)
+		return "", nil
+	case nil:
+		return value, nil
+	default:
+		return "", fmt.Errorf("ошибка при работе с Redis: %w", err)
+	}
+}
+
+func checkRedisConnection() (*redis.Client, error) {
 	client := redis.NewClient(&redis.Options{
-		Addr:     cfg.Addr,
-		Password: cfg.Password,
-		DB:       cfg.DB,
+		Addr:     cfgRedis.Addr,
+		Password: cfgRedis.Password,
+		DB:       cfgRedis.DB,
 	})
-	ctx, cancel := context.WithTimeout(context.Background(), cfg.TimeOut)
+	ctx, cancel := context.WithTimeout(context.Background(), cfgRedis.TimeOut)
 	defer cancel()
 	if err := client.Ping(ctx).Err(); err != nil {
 		return nil, fmt.Errorf("ошибка подключения к Redis: %v", err)

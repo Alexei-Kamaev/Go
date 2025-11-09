@@ -5,13 +5,7 @@ import (
 	"log"
 	"os"
 	"strings"
-	"sync"
 	"time"
-)
-
-var (
-	logMutex sync.Mutex
-	logs     string
 )
 
 func init() {
@@ -19,14 +13,17 @@ func init() {
 	if argsCount < 3 {
 		log.Fatalf("не хватает аргументов для запуска приложения, получено %d аргументов, для запуска необходимо 2", argsCount-1)
 	}
-	cfg := &redisConfig{
+	cfgRedis = &redisConfig{
 		Addr:     os.Args[1],
 		Password: os.Args[2],
 		DB:       0,
 		TimeOut:  5 * time.Second,
 	}
 	var err error
-	if redisClient, err = checkRedisConnection(cfg); err != nil {
+	if redisClient, err = checkRedisConnection(); err != nil {
+		log.Fatalln(err)
+	}
+	if err := checkConfigAppRedis(); err != nil {
 		log.Fatalln(err)
 	}
 }
