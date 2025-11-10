@@ -16,9 +16,12 @@ type redisConfig struct {
 }
 
 func getStringValueRedis(key string) (value string, err error) {
+
 	ctx, cancel := context.WithTimeout(context.Background(), cfgRedis.TimeOut)
 	defer cancel()
+
 	value, err = redisClient.Get(ctx, key).Result()
+
 	switch err {
 	case redis.Nil:
 		addLog("ключ %s не найден в Redis", key)
@@ -28,18 +31,24 @@ func getStringValueRedis(key string) (value string, err error) {
 	default:
 		return "", fmt.Errorf("ошибка при работе с Redis: %w", err)
 	}
+
 }
 
 func checkRedisConnection() (*redis.Client, error) {
+
 	client := redis.NewClient(&redis.Options{
 		Addr:     cfgRedis.Addr,
 		Password: cfgRedis.Password,
 		DB:       cfgRedis.DB,
 	})
+
 	ctx, cancel := context.WithTimeout(context.Background(), cfgRedis.TimeOut)
 	defer cancel()
+
 	if err := client.Ping(ctx).Err(); err != nil {
 		return nil, fmt.Errorf("ошибка подключения к Redis: %v", err)
 	}
+
 	return client, nil
+
 }
