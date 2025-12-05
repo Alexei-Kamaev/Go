@@ -8,23 +8,16 @@ import (
 )
 
 func checkConfigInRedis() error {
-	// проверяем наличие ключа с конфигурацией в Redis
 	if data, err := getStringRedis(configKey); err != nil {
-		// ошибка соединения с Redis, возвращаем ошибку
 		return err
 	} else if len(data) == 0 || checkAgeConfigFile() {
-		// если вдруг переменная пустая или конфигурация была обновлена
-		// парсим конфигурацию из фала
-		// заружаем в Redis конфигурацию
 		config, err := readConfigFile()
 		if err != nil {
 			return err
 		}
-		// парсим данные из config.json
 		if err := json.Unmarshal(config, &appConfig); err != nil {
 			return fmt.Errorf("возникла ошибка при парсинге конфигурации приложения: %v", err)
 		}
-		// загружаем строку в Redis
 		if err := setStringRedis(configKey, string(config)); err != nil {
 			return fmt.Errorf("возникла ошибка при записи конфигурации приложения в Redis: %v", err)
 		}

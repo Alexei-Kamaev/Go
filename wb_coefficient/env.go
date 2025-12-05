@@ -2,16 +2,9 @@ package main
 
 import (
 	"net/http"
-	"sync"
 	"time"
 
 	"github.com/redis/go-redis/v9"
-)
-
-const (
-	configKey        = "public_bot"
-	configFile       = "config.json"
-	maxAgeConfigFile = 2 * time.Minute
 )
 
 var (
@@ -19,8 +12,6 @@ var (
 	redisConfig *RedisConfig
 	appConfig   *AppConfig
 	apiTokenWB  string
-	logs        string
-	logMutex    sync.Mutex
 	httpClient  = &http.Client{
 		Timeout: 3 * time.Second,
 		Transport: &http.Transport{
@@ -50,13 +41,18 @@ type AppConfig struct {
 	CountRequests   int                   `json:"count_requests"`
 	PauseRequests   int                   `json:"pause_requests"`
 	RedisExpiration int                   `json:"redis_expiration"`
+	Boxes           int                   `json:"boxes"`
+	Monos           int                   `json:"monos"`
 	Clients         map[string]ClientData `json:"clients"`
 	URL             map[string]string     `json:"url"`
 	Token           string                `json:"token"`
 }
 
 type ClientData struct {
-	WhData   map[int]string    `json:"whid_data"`
+	IsActive bool              `json:"is_active"`
+	Pause    int               `json:"pause,omitempty"`
+	BoxData  map[int]int       `json:"box_data"`
+	MonoData map[int]int       `json:"mono_data"`
 	ChatData map[string]string `json:"chat_data"`
 	ApiData  map[string]string `json:"api_data"`
 }
