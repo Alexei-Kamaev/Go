@@ -1,43 +1,72 @@
 package main
 
 import (
-	"encoding/json"
+	"context"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
+	"os/signal"
 	"runtime/debug"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
+
+	"github.com/redis/go-redis/v9"
 )
 
 const (
-	configKey        = "public_bot"
-	configFile       = "config.json"
-	maxAgeConfigFile = 2 * time.Minute
+	configFile          = "config.json"
+	minimalPauseRequest = 15
+	appNameInRedis      = "public_bot"
 )
 
 var (
+	ctx          context.Context
+	cancel       context.CancelFunc
+	shutdownChan = make(chan os.Signal, 1)
 	logging      func(string, ...any)
 	logs         strings.Builder
-	logsCapacity = 100 * 1024 // 100KB
+	logsCapacity = 2 * 1024
 	logMutex     sync.Mutex
+	redisClient  *redis.Client
+	redisConfig  *RedisConfig
+	appConfig    *AppConfig
+	httpClient   = &http.Client{
+		Timeout: 10 * time.Second,
+		Transport: &http.Transport{
+			DisableCompression:    false,
+			ResponseHeaderTimeout: 8 * time.Second,
+			TLSHandshakeTimeout:   3 * time.Second,
+			MaxIdleConns:          10,
+			MaxIdleConnsPerHost:   5,
+			IdleConnTimeout:       30 * time.Second,
+			ExpectContinueTimeout: 1 * time.Second,
+			ForceAttemptHTTP2:     true,
+			MaxConnsPerHost:       2,
+		},
+	}
 )
 
 func main() {
-	// замеряем время работы приложения
+
+	ctx, cancel = context.WithCancel(context.Background())
+	defer cancel()
+
+	signal.Notify(shutdownChan, syscall.SIGINT, syscall.SIGTERM)
+
 	startGlobalTime := time.Now()
-	// выделяем память под логи
+
 	logs.Grow(logsCapacity)
-	// функция для логирования
+
 	logging = func(data string, args ...any) {
-		// блокировка записи, для однопоточного процесса не нужно,
-		// при масштабировании будет полезно от гонки данных
+
 		logMutex.Lock()
 		defer logMutex.Unlock()
-		// формат таймштампа
+
 		timeStamp := time.Now().Format("15:04:05.000")
-		// формирование и склейка лог-сообщений
+
 		fmt.Fprintf(&logs, "[%s] ", timeStamp)
 		if len(args) > 0 {
 			fmt.Fprintf(&logs, data, args...)
@@ -46,47 +75,43 @@ func main() {
 		}
 		logs.WriteByte('\n')
 	}
-	// первый лог
+
+	go func() {
+		sig := <-shutdownChan
+		logging("получен сигнал завершения: %v", sig)
+		cancel()
+		time.Sleep(2 * time.Second)
+	}()
+
 	logging("🚀 запускаемся...")
-	// отлавливаем паники и падения приложения
+
 	defer func() {
 		if r := recover(); r != nil {
 			log.Printf("паника в основном потоке: %v", r)
 			debug.PrintStack()
 		}
 	}()
-	// сброс всех логов при завершении приложения
+
 	defer func() {
 		logMutex.Lock()
 		defer logMutex.Unlock()
-		// проверка на пустые логи
+
 		if logs.Len() == 0 {
 			return
 		}
-		// дописываем в лог статистику использования [logs strings.Builder]
-		timestamp := time.Now().Format("15:04:05.000")
-		fmt.Fprintf(&logs, "[%s] [STATS] Capacity: %d, Length: %d\n",
-			timestamp, logs.Cap(), logs.Len())
-		// сброс всех логов в StdOut
+
 		if _, err := fmt.Print(logs.String()); err != nil {
 			log.Printf("возникла ошибка при записи логов: %v", err)
 		}
-		// обнуляем логи для дальнейшего использования
-		logs.Reset()
 	}()
-	// логируем завершение работы приложения
+
 	defer func() {
 		logging("приложение завершено [%.3f сек]", time.Since(startGlobalTime).Seconds())
 	}()
-	// получаем необходимые аргументы для запуска приложения
-	if len(os.Args) < 2 {
-		logging("для запуска приложения необходимо минимум 2 аргумента: адрес Redis и Redis Password!")
-		return
-	}
-	// инициализация Redis клиента
+
 	redisConfig = &RedisConfig{
-		Addr:     os.Args[1],
-		Password: os.Args[2],
+		Addr:     os.Getenv("redisAddr"),
+		Password: os.Getenv("redisPassword"),
 		DB:       0,
 		TimeOut:  3 * time.Second}
 	var err error
@@ -95,80 +120,141 @@ func main() {
 		logging("ошибка запуска возникла при проверке подключения к Redis с полученными аргументами запуска приложения: %v", err)
 		return
 	}
-	if len(os.Args) > 3 {
-		apiTokenWB = os.Args[3]
-		if appConfig.DebugMode {
-			token := apiTokenWB[:6] + "..."
-			logging("получен API токен WB в качестве аргумента запуска приложения: %s", token)
-		}
-	}
+
 	logging("📋 загружаем конфигурацию...")
-	if err := checkConfigInRedis(); err != nil {
-		logging("ошибка при проверке конфигурации в Redis: %v", err)
+
+	if err := loadConfigFromJson(); err != nil {
+		logging("ошибка загрузки конфигурации: %v", err)
+		return
 	}
-	if redisClient != nil {
-		defer redisClient.Close()
+
+	if appConfig == nil {
+		logging("КОНФИГ НЕ ЗАГРУЖЕН! appConfig is nil")
+		return
+	}
+
+	if !appConfig.Working {
+		logging("приложение на паузе параметр [working] в config.json")
+		return
 	}
 
 	logging("приложение успешно запущено")
-	if appConfig == nil {
-		log.Println("конфигурация приложения не загружена!")
-		return
-	} else if appConfig.DebugMode {
-		if data, err := json.MarshalIndent(appConfig, "", "  "); err == nil {
-			logging("загруженная конфигурация:\n%s", string(data))
-		} else {
-			logging("%v", err)
-		}
-	}
-	if apiTokenWB == "" {
-		apiTokenWB = appConfig.Token
-	}
-	if !appConfig.Working {
-		logging("приложение на паузе параметр [working] в config.json")
-	}
-	for c := range appConfig.CountRequests {
-		if !appConfig.Working {
-			// надо подумать над логикой остановки приложения во время работы
-			// пока неверная логика, приложение полностью останавливается из-за одной ошибки
-			logging("приложение было остановлено в процессе работы, по ошибке ответа от сервера")
+
+	var data = make([]Response, 0, 1024)
+
+	for c := 0; ; c++ {
+
+		data = data[:0]
+
+		if ctx.Err() != nil {
+			logging("получена команда остановки приложения")
+			time.Sleep(100 * time.Millisecond)
 			return
 		}
-		var data []Response
+
+		if !appConfig.Working {
+			logging("приложение на паузе, ждем 300 секунд")
+			for range 300 {
+				if ctx.Err() != nil {
+					logging("получена команда остановки приложения")
+					time.Sleep(1 * time.Second)
+					return
+				}
+				time.Sleep(1 * time.Second)
+			}
+			continue
+		}
+
 		startIterationTime := time.Now()
-		logging("%d круг", c+1)
-		if err := getCoefWarehouses(&data); err != nil {
+
+		if err := getCoefWarehouses(&data, appConfig.Token); err != nil {
 			logging("ошибка при получении коэффициентов:\n%v", err)
 			continue
 		}
+
+		logging("получено сырых данных: %d, capacity: %d", len(data), cap(data))
+
 		if err := clearData(&data); err != nil {
 			logging("ошибка очистки данных от КФ [-1]:\n%v", err)
 			continue
 		}
-		for client := range appConfig.Clients {
-			if !appConfig.Clients[client].IsActive {
-				logging("у клиента %s установлен статус [%t]", client, appConfig.Clients[client].IsActive)
+
+		for client, clientConfig := range appConfig.Clients {
+
+			if len(appConfig.Clients[client].BoxData)+len(appConfig.Clients[client].MonoData) == 0 {
+				logging("пропуск клиента [%s], нет складов в конфигурации", client)
 				continue
 			}
-			pause := appConfig.Clients[client].Pause
-			if pause > 0 {
-				logging("у клиента %s пауза по api %dмс", client, pause)
-				if pause-600 > 0 {
-					pause -= 600
+
+			if !clientConfig.IsActive {
+				logging("пропуск клиента %s статус [%t]", client, clientConfig.IsActive)
+				continue
+			}
+
+			if clientConfig.Pause > 0 {
+				logging("у клиента %s пауза по api %dмс", client, clientConfig.Pause)
+				updatedClient := clientConfig
+				if updatedClient.Pause > 600 {
+					updatedClient.Pause -= 600
 				} else {
-					pause = 0
+					updatedClient.Pause = 0
 				}
+				appConfig.Clients[client] = updatedClient
+				logging("обновлена api пауза клиента %s: %dмс", client, updatedClient.Pause)
 				continue
 			}
+
 			if err := prepareMessages(data, client); err != nil {
-				logging("у клиента %s ошибка при формировании сообщений: %v", client, err)
+				logging("у клиента %s ошибка при формировании или отправке сообщения: %v", client, err)
 			}
 		}
-		sleep := time.Duration(appConfig.PauseRequests)*time.Second - time.Since(startIterationTime)
-		logging("общее время: %.3f, текущее время: %.3f, остаток паузы в данной итерации: %v",
-			time.Since(startGlobalTime).Seconds(), time.Since(startIterationTime).Seconds(), sleep)
-		if sleep > 0 && c < appConfig.CountRequests-1 {
-			time.Sleep(sleep)
+
+		reload, err := checkExistsKeyInRedis(appNameInRedis)
+		if err != nil {
+			logging("%v", err)
+		}
+		if !reload {
+			loadConfigFromJson()
+		}
+
+		pause := max(minimalPauseRequest, appConfig.PauseIteration)
+
+		sleep := time.Duration(pause)*time.Second - time.Since(startIterationTime)
+
+		logging("время работы цикла: %.3f, остаток от паузы %d сек: %.3f сек",
+			time.Since(startIterationTime).Seconds(),
+			pause,
+			sleep.Seconds(),
+		)
+
+		logMutex.Lock()
+		if logs.Len() > 0 {
+			fmt.Print(logs.String())
+			logs.Reset()
+		}
+		logMutex.Unlock()
+
+		if sleep <= 0 {
+
+			time.Sleep(100 * time.Millisecond)
+
+		} else {
+
+			seconds := int(sleep.Seconds())
+
+			remainder := sleep - time.Duration(seconds)*time.Second
+
+			for range seconds {
+				if ctx.Err() != nil {
+					logging("получен сигнал завершения приложения")
+					return
+				}
+				time.Sleep(1 * time.Second)
+			}
+
+			if remainder > 0 {
+				time.Sleep(remainder)
+			}
 		}
 	}
 }

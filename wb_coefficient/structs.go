@@ -1,29 +1,7 @@
 package main
 
 import (
-	"net/http"
 	"time"
-
-	"github.com/redis/go-redis/v9"
-)
-
-var (
-	redisClient *redis.Client
-	redisConfig *RedisConfig
-	appConfig   *AppConfig
-	apiTokenWB  string
-	httpClient  = &http.Client{
-		Timeout: 3 * time.Second,
-		Transport: &http.Transport{
-			DisableCompression:    true,
-			ResponseHeaderTimeout: 2 * time.Second,
-			TLSHandshakeTimeout:   1 * time.Second,
-			MaxIdleConns:          10,
-			IdleConnTimeout:       30 * time.Second,
-			MaxIdleConnsPerHost:   5,
-			ExpectContinueTimeout: 500 * time.Millisecond,
-		},
-	}
 )
 
 type RedisConfig struct {
@@ -34,12 +12,13 @@ type RedisConfig struct {
 }
 
 type AppConfig struct {
+	Admin           string                `json:"admin"`
+	BotToken        string                `json:"bot_token"`
 	DebugMode       bool                  `json:"debug_mode"`
 	Working         bool                  `json:"working"`
 	RetryCodes      map[int]bool          `json:"retry_codes"`
-	AllWarehouses   []string              `json:"all_warehouses"`
-	CountRequests   int                   `json:"count_requests"`
-	PauseRequests   int                   `json:"pause_requests"`
+	AllWarehouses   []string              `json:"all_warehouses,omitempty"`
+	PauseIteration  int                   `json:"pause"`
 	RedisExpiration int                   `json:"redis_expiration"`
 	Boxes           int                   `json:"boxes"`
 	Monos           int                   `json:"monos"`
@@ -55,6 +34,7 @@ type ClientData struct {
 	MonoData map[int]int       `json:"mono_data"`
 	ChatData map[string]string `json:"chat_data"`
 	ApiData  map[string]string `json:"api_data"`
+	TGToken  string            `json:"tg_token"`
 }
 
 type Response struct {

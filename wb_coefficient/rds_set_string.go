@@ -11,7 +11,7 @@ func setStringRedis(key, data string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), redisConfig.TimeOut)
 	defer cancel()
 
-	var redisExp = 1
+	var redisExp = 5
 
 	if appConfig != nil {
 		redisExp = appConfig.RedisExpiration
