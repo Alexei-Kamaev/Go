@@ -12,29 +12,32 @@ type RedisConfig struct {
 }
 
 type AppConfig struct {
-	Admin           string                `json:"admin"`
-	BotToken        string                `json:"bot_token"`
-	DebugMode       bool                  `json:"debug_mode"`
-	Working         bool                  `json:"working"`
-	RetryCodes      map[int]bool          `json:"retry_codes"`
-	AllWarehouses   []string              `json:"all_warehouses,omitempty"`
-	PauseIteration  int                   `json:"pause"`
-	RedisExpiration int                   `json:"redis_expiration"`
-	Boxes           int                   `json:"boxes"`
-	Monos           int                   `json:"monos"`
-	Clients         map[string]ClientData `json:"clients"`
-	URL             map[string]string     `json:"url"`
-	Token           string                `json:"token"`
+	Admin                string `json:"admin"`
+	BotToken             string `json:"bot_token"`
+	DebugMode            bool   `json:"debug_mode"`
+	Working              bool   `json:"working"`
+	AllActiveClients     []string
+	AllCountSendMessages int
+	RetryCodes           map[int]bool          `json:"retry_codes"`
+	AllWarehouses        []string              `json:"all_warehouses,omitempty"`
+	PauseIteration       int                   `json:"pause"`
+	RedisExpiration      int                   `json:"redis_expiration"`
+	Boxes                int                   `json:"boxes"`
+	Monos                int                   `json:"monos"`
+	Clients              map[string]ClientData `json:"clients"`
+	URL                  map[string]string     `json:"url"`
+	Token                string                `json:"token"`
 }
 
 type ClientData struct {
-	IsActive bool              `json:"is_active"`
-	Pause    int               `json:"pause,omitempty"`
-	BoxData  map[int]int       `json:"box_data"`
-	MonoData map[int]int       `json:"mono_data"`
-	ChatData map[string]string `json:"chat_data"`
-	ApiData  map[string]string `json:"api_data"`
-	TGToken  string            `json:"tg_token"`
+	IsActive  bool              `json:"is_active"`
+	Pause     int               `json:"pause,omitempty"`
+	PauseWHID map[int]bool      `json:"pause_whid,omitempty"`
+	BoxData   map[int]int       `json:"box_data"`
+	MonoData  map[int]int       `json:"mono_data"`
+	ChatData  map[string]string `json:"chat_data"`
+	ApiData   map[string]string `json:"api_data"`
+	TGToken   string            `json:"tg_token"`
 }
 
 type Response struct {
@@ -79,4 +82,42 @@ type Response struct {
 	// Тип склада:
 	// true — сортировочный центр (СЦ)
 	// false — обычный
+}
+
+type WarehouseListID struct {
+	ID int64 `json:"ID"` // integer
+	// ID склада
+	Name string `json:"name"` // string
+	// Название склада
+	Address string `json:"address"` // string
+	// Адрес склада
+	WorkTime string `json:"workTime"` // string
+	// Режим работы склада
+	IsActive bool `json:"isActive"` // boolean
+	// Доступен ли в качестве склада назначения:
+	// true — да
+	// false — нет
+	IsTransitActive bool `json:"isTransitActive"` // boolean
+	// Доступен ли в качестве транзитного склада:
+	// true — да
+	// false — нет
+}
+
+type TelegramResponse struct {
+	Status      bool   `json:"ok"`
+	Description string `json:"description,omitempty"`
+	ErrorCode   int    `json:"error_code,omitempty"`
+	Parameters  struct {
+		RetryAfter int `json:"retry_after,omitempty"`
+	} `json:"parameters,omitempty"`
+	Result struct {
+		MessageID int    `json:"message_id"`
+		Text      string `json:"text"`
+		Date      int    `json:"date"`
+		Chat      struct {
+			ID       int64  `json:"id"`
+			Title    string `json:"title"`
+			Username string `json:"username"`
+		} `json:"chat"`
+	} `json:"result,omitempty"`
 }

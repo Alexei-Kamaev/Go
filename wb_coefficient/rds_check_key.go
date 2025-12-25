@@ -5,6 +5,7 @@ import (
 	"fmt"
 )
 
+// Функция, которая принимает ключ и проверяет его наличие в Редис.
 func checkExistsKeyInRedis(key string) (bool, error) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), redisConfig.TimeOut)

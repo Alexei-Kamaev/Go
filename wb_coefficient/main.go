@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"runtime/debug"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -20,6 +21,16 @@ const (
 	configFile          = "config.json"
 	minimalPauseRequest = 15
 	appNameInRedis      = "public_bot"
+	EmojiInbox          = "📥"
+	EmojiSuccess        = "✅"
+	EmojiProcessing     = "⚡"
+	EmojiWarning        = "⚠️"
+	EmojiClock          = "🕒"
+	EmojiStats          = "📊"
+	EmojiError          = "❌"
+	EmojiClient         = "👤"
+	EmojiLoop           = "🔄"
+	EmojiTelegram       = "📨"
 )
 
 var (
@@ -51,22 +62,24 @@ var (
 
 func main() {
 
+	// объявление контекста завершения приложения
 	ctx, cancel = context.WithCancel(context.Background())
 	defer cancel()
 
+	// ловим определённые сигналы для завершения приложения
 	signal.Notify(shutdownChan, syscall.SIGINT, syscall.SIGTERM)
 
+	// переменная для логирования времени работы приложения
 	startGlobalTime := time.Now()
 
+	// объявляем логирование и размер логов
 	logs.Grow(logsCapacity)
-
+	// функция логирования
 	logging = func(data string, args ...any) {
-
 		logMutex.Lock()
 		defer logMutex.Unlock()
-
 		timeStamp := time.Now().Format("15:04:05.000")
-
+		// сброс логов в StdOut
 		fmt.Fprintf(&logs, "[%s] ", timeStamp)
 		if len(args) > 0 {
 			fmt.Fprintf(&logs, data, args...)
@@ -76,87 +89,122 @@ func main() {
 		logs.WriteByte('\n')
 	}
 
+	// фоновая горутина, которая ловит сигнал завершения приложения
 	go func() {
 		sig := <-shutdownChan
-		logging("получен сигнал завершения: %v", sig)
+		logging("%s получен сигнал завершения: %v", EmojiWarning, sig)
 		cancel()
 		time.Sleep(2 * time.Second)
 	}()
 
 	logging("🚀 запускаемся...")
 
+	// горутина для ловли паник от падения приложения
 	defer func() {
 		if r := recover(); r != nil {
-			log.Printf("паника в основном потоке: %v", r)
+			log.Printf("%s паника в основном потоке: %v", EmojiWarning, r)
 			debug.PrintStack()
 		}
 	}()
 
+	// сброс логов при завершении приложения
 	defer func() {
-		logMutex.Lock()
-		defer logMutex.Unlock()
-
 		if logs.Len() == 0 {
 			return
 		}
-
 		if _, err := fmt.Print(logs.String()); err != nil {
-			log.Printf("возникла ошибка при записи логов: %v", err)
+			log.Printf("%s возникла ошибка при записи логов: %v", EmojiWarning, err)
 		}
 	}()
 
+	// горутина с логированием времени работы приложения с момента запуска демона
 	defer func() {
-		logging("приложение завершено [%.3f сек]", time.Since(startGlobalTime).Seconds())
+		var (
+			msg      strings.Builder
+			workTime = int(time.Since(startGlobalTime).Seconds())
+		)
+		msg.Grow(64)
+		if days := workTime / 86400; days > 0 {
+			fmt.Fprintf(&msg, "%d дней ", days)
+		}
+		if hours := (workTime % 86400) / 3600; hours > 0 {
+			fmt.Fprintf(&msg, "%d часов ", hours)
+		}
+		if minutes := (workTime % 3600) / 60; minutes > 0 {
+			fmt.Fprintf(&msg, "%d минут ", minutes)
+		}
+		seconds := workTime % 60
+		fmt.Fprintf(&msg, "%d секунд", seconds)
+		logging("%s приложение завершено, общее время работы: %s",
+			EmojiSuccess, msg.String())
 	}()
 
+	// создание Редис клиента
 	redisConfig = &RedisConfig{
 		Addr:     os.Getenv("redisAddr"),
 		Password: os.Getenv("redisPassword"),
 		DB:       0,
 		TimeOut:  3 * time.Second}
+
 	var err error
+
+	// стартовые проверки
+	// подключение к Редис
+	// загрузка с перезаписью уже имеющихся значений
+	// проверка на загруженный конфиг в Редис и в приложение
 	logging("📡 подключаемся к Redis...")
 	if redisClient, err = checkRedisConnection(); err != nil {
-		logging("ошибка запуска возникла при проверке подключения к Redis с полученными аргументами запуска приложения: %v", err)
+		logging("%s ошибка запуска возникла при проверке подключения к Redis с полученными аргументами запуска приложения: %v", EmojiError, err)
 		return
 	}
-
 	logging("📋 загружаем конфигурацию...")
-
 	if err := loadConfigFromJson(); err != nil {
-		logging("ошибка загрузки конфигурации: %v", err)
+		logging("%s ошибка загрузки конфигурации: %v", EmojiError, err)
 		return
 	}
-
 	if appConfig == nil {
-		logging("КОНФИГ НЕ ЗАГРУЖЕН! appConfig is nil")
+		logging("%s КОНФИГ НЕ ЗАГРУЖЕН! appConfig is nil", EmojiError)
 		return
 	}
-
+	// проверка флага на работу приложения
 	if !appConfig.Working {
-		logging("приложение на паузе параметр [working] в config.json")
+		logging("%s приложение на паузе параметр [working] в config.json", EmojiWarning)
 		return
 	}
 
-	logging("приложение успешно запущено")
+	// проверки закончены, старт приложения
+	logging("%s приложение успешно запущено", EmojiSuccess)
 
+	// создаём срез необходимого размера для аллокации в памяти один раз
 	var data = make([]Response, 0, 1024)
 
+	// вечный цикл (приложение - демон)
 	for c := 0; ; c++ {
-
+		// обнуление среза с данными после каждой итерации
 		data = data[:0]
-
+		// кэшируем даты, чтобы постоянно их не преобразовывать
+		var mapDate = make(map[string]string)
+		// ловим команду на завершение приложения
 		if ctx.Err() != nil {
-			logging("получена команда остановки приложения")
+			logging("%s получена команда остановки приложения", EmojiWarning)
 			time.Sleep(100 * time.Millisecond)
 			return
 		}
 
+		// если вдруг приложение стало на паузу, надо сообщить админу и просто держать паузу
 		if !appConfig.Working {
-			logging("приложение на паузе, ждем 300 секунд")
+			messageForAdmin := fmt.Sprintf("%s приложение на паузе, ждем 300 секунд", EmojiWarning)
+			logging("%s", messageForAdmin)
+			if c%5 == 0 {
+				if err := sendTextMessage(messageForAdmin, appConfig.Admin, 0); err != nil {
+					logging("%v", err)
+				}
+			}
+
+			// ловим сигнал на завершение работы
 			for range 300 {
 				if ctx.Err() != nil {
-					logging("получена команда остановки приложения")
+					logging("%s получена команда остановки приложения", EmojiWarning)
 					time.Sleep(1 * time.Second)
 					return
 				}
@@ -165,93 +213,171 @@ func main() {
 			continue
 		}
 
-		startIterationTime := time.Now()
+		// переменные для логирования времени работы
+		// расчёт паузы, минимальная пауза 10 сек, мы вычисляем большее значение из двух
+		var (
+			startIterationTime = time.Now()
+			pauseInIteration   = max(minimalPauseRequest, appConfig.PauseIteration)
+		)
 
-		if err := getCoefWarehouses(&data, appConfig.Token); err != nil {
-			logging("ошибка при получении коэффициентов:\n%v", err)
+		// получаем сырую информацию от api WB по коэффициентам приёмки
+		if err := getCoefWarehouses(&data); err != nil {
+			logging("%s ошибка при получении коэффициентов:\n%v", EmojiWarning, err)
+			continue
+		}
+		logging("%s получено сырых данных: %d, capacity: %d", EmojiInbox, len(data), cap(data))
+
+		// чистим данные от -1
+		if err := clearData(&data, mapDate); err != nil {
+			logging("%s ошибка очистки данных от КФ [-1]:\n%v", EmojiWarning, err)
 			continue
 		}
 
-		logging("получено сырых данных: %d, capacity: %d", len(data), cap(data))
+		// цикл обработки клиентов
+		// отправка каждому клиенту своих данных в тележку
+		for _, client := range appConfig.AllActiveClients {
 
-		if err := clearData(&data); err != nil {
-			logging("ошибка очистки данных от КФ [-1]:\n%v", err)
-			continue
-		}
+			// пропуск итерациии, если по какой-то причине получился пустой срез
+			// здесь, потому-что нужно соблюдать паузу между итерациями
+			if len(data) == 0 {
+				continue
+			}
 
-		for client, clientConfig := range appConfig.Clients {
-
+			// пропуск клиента у которого нет складов (новичок или кто удалил склады из конфига)
 			if len(appConfig.Clients[client].BoxData)+len(appConfig.Clients[client].MonoData) == 0 {
-				logging("пропуск клиента [%s], нет складов в конфигурации", client)
+				logging("%s пропуск клиента [%s], нет складов в конфигурации", EmojiWarning, client)
 				continue
 			}
 
-			if !clientConfig.IsActive {
-				logging("пропуск клиента %s статус [%t]", client, clientConfig.IsActive)
-				continue
+			// пропуск клиента, если его конфиг не загружен по какой-то причине
+			if client != appConfig.Admin {
+				if _, ok := appConfig.Clients[client]; !ok {
+					logging("пропуск клиента %s, его нет в конфигурации", client)
+					continue
+				}
 			}
 
-			if clientConfig.Pause > 0 {
-				logging("у клиента %s пауза по api %dмс", client, clientConfig.Pause)
-				updatedClient := clientConfig
-				if updatedClient.Pause > 600 {
-					updatedClient.Pause -= 600
+			// логирование времени отработки каждого клиента
+			var (
+				startWorkTimeClient = time.Now()
+			)
+
+			// если у клиента есть пауза по api от ТГ или ВБ, то минусуем и пропускаем клиента
+			if appConfig.Clients[client].Pause > 0 {
+				logging("%s у клиента [%s] пауза %d сек",
+					EmojiWarning, client, appConfig.Clients[client].Pause)
+				updatedClient := appConfig.Clients[client]
+				if updatedClient.Pause > pauseInIteration {
+					updatedClient.Pause -= pauseInIteration
 				} else {
 					updatedClient.Pause = 0
 				}
+				// сохраняем новую паузу за вычетом времени затраченного на итерацию
 				appConfig.Clients[client] = updatedClient
-				logging("обновлена api пауза клиента %s: %dмс", client, updatedClient.Pause)
 				continue
 			}
 
-			if err := prepareMessages(data, client); err != nil {
-				logging("у клиента %s ошибка при формировании или отправке сообщения: %v", client, err)
+			// отправка очищенных данных в функцию формирования сообщения с последующей отправкой клиенту в чат
+			if err := prepareMessages(data, mapDate, client); err != nil {
+				logging("%v", err)
+			}
+
+			// финишное логирование каждого клиента и времени на его обработку
+			logging("%s обработка [%s]: %.3f сек",
+				EmojiProcessing, client, time.Since(startWorkTimeClient).Seconds())
+		}
+
+		// перезагрузка конфигурации
+		// проверка флаг-ключа загруженного конфига в Редис
+		reloadConfig, err := checkExistsKeyInRedis(appNameInRedis)
+		if err != nil {
+			logging("%s %v", EmojiWarning, err)
+		}
+		// если конфига нет в Редис или ttl флаг-ключа меньше текущей паузы -> загружаем конфиг
+		ttlKey, err := checkTTLRedisKey(appNameInRedis)
+		if err != nil {
+			logging("%s %v", EmojiWarning, err)
+		} else if !reloadConfig || ttlKey <= pauseInIteration {
+			if err := loadConfigFromJson(); err != nil {
+				logging("%s %v", EmojiWarning, err)
 			}
 		}
 
-		reload, err := checkExistsKeyInRedis(appNameInRedis)
+		// перезагрузка списка всех складов ВБ
+		// если ключа "warehouse_list" нет в Редис
+		// если такой ключ есть, то загружать заново не надо
+		reloadListWHID, err := checkExistsKeyInRedis("warehouse_list")
 		if err != nil {
 			logging("%v", err)
 		}
-		if !reload {
-			loadConfigFromJson()
+		if !reloadListWHID {
+			// делаем мапу со складами по ключу "ID склада"
+			// чтобы в дальнейшем искать по этим данным
+			var listWarehouseID = make(map[int64]string)
+			if err := getListWarehouseWB(&listWarehouseID); err != nil {
+				logging("%s %v", EmojiWarning, err)
+			} else {
+				logging("%s получено %d складов для записи в Редис",
+					EmojiSuccess, len(listWarehouseID))
+				// формирование ключа для Редис
+				var sb strings.Builder
+				sb.Grow(20)
+				for k, v := range listWarehouseID {
+					sb.Reset()
+					sb.WriteString("warehouse_")
+					sb.WriteString(strconv.FormatInt(k, 10))
+					// непосредственно загрузка данных в Редис
+					// загрузка по одному складу в Редис
+					if err := setStringRedis(sb.String(), v); err != nil {
+						logging("%s при сохранении списка сладов в Редис, что-то пошло не так: %v",
+							EmojiWarning, err)
+					}
+				}
+				// формируем ключ-флаг для проверок на необходимость повторных загрузок
+				if err := setStringRedis("warehouse_list", "OK"); err != nil {
+					logging("%s при записи списка складов в Редис произошла ошибка: %v",
+						EmojiWarning, err)
+				}
+			}
 		}
 
-		pause := max(minimalPauseRequest, appConfig.PauseIteration)
+		// расчёт паузы для итерации между запросами к api-WB
+		sleep := time.Duration(pauseInIteration)*time.Second - time.Since(startIterationTime)
 
-		sleep := time.Duration(pause)*time.Second - time.Since(startIterationTime)
-
-		logging("время работы цикла: %.3f, остаток от паузы %d сек: %.3f сек",
+		// простое логирование между итерациями
+		logging("%s время работы: %.1f сек, остаток паузы: %d сек",
+			EmojiClock,
 			time.Since(startIterationTime).Seconds(),
-			pause,
-			sleep.Seconds(),
+			int(sleep.Seconds()),
 		)
+		logging("%s всего отправлено [%d] сообщений в Телеграмм",
+			EmojiTelegram, appConfig.AllCountSendMessages)
+		appConfig.AllCountSendMessages = 0
 
-		logMutex.Lock()
+		// непосредственно сброс логов в StdOut
 		if logs.Len() > 0 {
 			fmt.Print(logs.String())
 			logs.Reset()
 		}
-		logMutex.Unlock()
 
+		// на этом этапе просто спим между запросами к api-WB
 		if sleep <= 0 {
-
-			time.Sleep(100 * time.Millisecond)
-
+			// минимальная пауза, на всякий случай
+			time.Sleep(1 * time.Second)
 		} else {
 
+			// в этой части разбиваем на целые секунды
+			// для проверки контекста завершения приложения
 			seconds := int(sleep.Seconds())
-
 			remainder := sleep - time.Duration(seconds)*time.Second
-
 			for range seconds {
 				if ctx.Err() != nil {
-					logging("получен сигнал завершения приложения")
+					logging("%s получен сигнал завершения приложения", EmojiWarning)
 					return
 				}
 				time.Sleep(1 * time.Second)
 			}
-
+			// досыпаем остаток от целых секунд
 			if remainder > 0 {
 				time.Sleep(remainder)
 			}
